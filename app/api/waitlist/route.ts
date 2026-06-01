@@ -1,14 +1,29 @@
 import { NextResponse } from "next/server"
 import { Resend } from "resend"
+import { createClient } from "@/lib/supabase/server"
+import { waitlistSchema } from "@/lib/validations"
 
 const FROM = "Listeners <onboarding@resend.dev>"
 
 export async function POST(request: Request) {
   try {
-    const { name, email } = await request.json()
+    const body = await request.json()
+    const parsed = waitlistSchema.safeParse(body)
 
-    if (!email || typeof email !== "string") {
-      return NextResponse.json({ error: "Email is required." }, { status: 400 })
+    if (!parsed.success) {
+      const errorMessage = parsed.error.issues.map((issue) => issue.message).join(" ")
+      return NextResponse.json({ error: errorMessage }, { status: 400 })
+    }
+
+    const supabase = await createClient()
+    const { error: dbError } = await supabase.from("waitlist").insert(parsed.data)
+
+    if (dbError) {
+      if (dbError.code === "23505") {
+        return NextResponse.json({ error: "This email is already on the waitlist." }, { status: 409 })
+      }
+      console.error("[v0] Waitlist DB error:", dbError)
+      return NextResponse.json({ error: "Failed to save waitlist submission." }, { status: 500 })
     }
 
     if (!process.env.RESEND_API_KEY) {
@@ -20,16 +35,16 @@ export async function POST(request: Request) {
 
     await resend.emails.send({
       from: FROM,
-      to: email,
+      to: parsed.data.email,
       subject: "Welcome to Listeners",
       text: "Thank you for joining the Listeners waitlist. We're building a place where people can feel heard, understood, and supported. You'll be among the first to know when we launch.",
-      html: confirmationHtml(typeof name === "string" ? name : undefined),
+      html: confirmationHtml(parsed.data.name),
     })
 
     return NextResponse.json({ ok: true, emailed: true })
   } catch (error) {
-    console.log("[v0] Waitlist email error:", error)
-    return NextResponse.json({ error: "Failed to send confirmation email." }, { status: 500 })
+    console.error("[v0] Waitlist API error:", error)
+    return NextResponse.json({ error: "Failed to process waitlist submission." }, { status: 500 })
   }
 }
 

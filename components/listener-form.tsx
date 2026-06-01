@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { Section, FadeUp } from "@/components/motion"
-import { createClient } from "@/lib/supabase/client"
 import { listenerSchema } from "@/lib/validations"
 import {
   CountrySelect,
@@ -50,28 +49,19 @@ export function ListenerForm() {
     }
 
     setPending(true)
+
     try {
-      const payload = {
-        ...parsed.data,
-        linkedin: parsed.data.linkedin ? parsed.data.linkedin : null,
-      }
-      const supabase = createClient()
-      const { error: dbError } = await supabase.from("listener_applications").insert(payload)
-
-      if (dbError) {
-        if (dbError.code === "23505") {
-          setErrors({ email: "An application with this email already exists." })
-        } else {
-          setErrors({ form: "Something went wrong. Please try again." })
-        }
-        return
-      }
-
-      await fetch("/api/listener", {
+      const response = await fetch("/api/listener", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsed.data),
-      }).catch(() => null)
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        setErrors({ form: result.error ?? "Something went wrong. Please try again." })
+        return
+      }
 
       setDone(true)
     } catch {

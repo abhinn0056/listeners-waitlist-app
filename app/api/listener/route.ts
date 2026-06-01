@@ -1,15 +1,43 @@
 import { NextResponse } from "next/server"
 import { Resend } from "resend"
+import { createClient } from "@/lib/supabase/server"
+import { listenerSchema } from "@/lib/validations"
 
 const FROM = "Listeners <onboarding@resend.dev>"
+
+type Application = {
+  full_name?: string
+  email?: string
+  country?: string
+  linkedin?: string | null
+  motivation?: string
+  experience?: string
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { full_name, email, country, linkedin, motivation, experience } = body ?? {}
+    const parsed = listenerSchema.safeParse(body)
 
-    if (!email || typeof email !== "string") {
-      return NextResponse.json({ error: "Email is required." }, { status: 400 })
+    if (!parsed.success) {
+      const errorMessage = parsed.error.issues.map((issue) => issue.message).join(" ")
+      return NextResponse.json({ error: errorMessage }, { status: 400 })
+    }
+
+    const payload = {
+      ...parsed.data,
+      linkedin: parsed.data.linkedin ? parsed.data.linkedin : null,
+    }
+
+    const supabase = await createClient()
+    const { error: dbError } = await supabase.from("listener_applications").insert(payload)
+
+    if (dbError) {
+      if (dbError.code === "23505") {
+        return NextResponse.json({ error: "An application with this email already exists." }, { status: 409 })
+      }
+      console.error("[v0] Listener DB error:", dbError)
+      return NextResponse.json({ error: "Failed to save listener application." }, { status: 500 })
     }
 
     if (!process.env.RESEND_API_KEY) {
@@ -19,24 +47,22 @@ export async function POST(request: Request) {
 
     const resend = new Resend(process.env.RESEND_API_KEY)
 
-    // Confirmation to the applicant.
     await resend.emails.send({
       from: FROM,
-      to: email,
+      to: parsed.data.email,
       subject: "Your Listeners application",
       text: "Thank you for applying to become a Listener. We've received your application and will review it carefully. We'll reach out soon with next steps.",
-      html: applicantHtml(typeof full_name === "string" ? full_name : undefined),
+      html: applicantHtml(parsed.data.full_name),
     })
 
-    // Full summary to the admin.
     const adminEmail = process.env.ADMIN_EMAIL
     if (adminEmail) {
       await resend.emails.send({
         from: FROM,
         to: adminEmail,
-        subject: `New listener application — ${full_name ?? email}`,
-        text: summaryText({ full_name, email, country, linkedin, motivation, experience }),
-        html: summaryHtml({ full_name, email, country, linkedin, motivation, experience }),
+        subject: `New listener application — ${parsed.data.full_name ?? parsed.data.email}`,
+        text: summaryText(parsed.data),
+        html: summaryHtml(parsed.data),
       })
     } else {
       console.log("[v0] ADMIN_EMAIL not set — skipping admin summary.")
@@ -44,18 +70,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, emailed: true })
   } catch (error) {
-    console.log("[v0] Listener email error:", error)
-    return NextResponse.json({ error: "Failed to send emails." }, { status: 500 })
+    console.error("[v0] Listener API error:", error)
+    return NextResponse.json({ error: "Failed to process listener application." }, { status: 500 })
   }
-}
-
-type Application = {
-  full_name?: string
-  email?: string
-  country?: string
-  linkedin?: string | null
-  motivation?: string
-  experience?: string
 }
 
 function applicantHtml(name?: string) {

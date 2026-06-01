@@ -2,7 +2,6 @@
 
 import { useState } from "react"
 import { Section, FadeUp } from "@/components/motion"
-import { createClient } from "@/lib/supabase/client"
 import { waitlistSchema } from "@/lib/validations"
 import {
   CountrySelect,
@@ -39,25 +38,19 @@ export function WaitlistForm() {
     }
 
     setPending(true)
+
     try {
-      const supabase = createClient()
-      const { error: dbError } = await supabase.from("waitlist").insert(parsed.data)
-
-      if (dbError) {
-        if (dbError.code === "23505") {
-          setErrors({ email: "This email is already on the waitlist." })
-        } else {
-          setErrors({ form: "Something went wrong. Please try again." })
-        }
-        return
-      }
-
-      // Fire confirmation email (non-blocking for success state).
-      await fetch("/api/waitlist", {
+      const response = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: parsed.data.name, email: parsed.data.email }),
-      }).catch(() => null)
+        body: JSON.stringify(parsed.data),
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        setErrors({ form: result.error ?? "Something went wrong. Please try again." })
+        return
+      }
 
       setDone(true)
     } catch {
